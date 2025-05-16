@@ -1,0 +1,82 @@
+#!/bin/bash
+
+images_path="IMAGES_PATH"
+API_KEY="API_KEY"
+model="gemini-2.0-flash"
+
+get_response() {
+    local IMAGE_PATH="$1"
+    local description="$2"
+    
+    MIME_TYPE=$(file -b --mime-type "${IMAGE_PATH}")
+    NUM_BYTES=$(wc -c < "${IMAGE_PATH}")
+    DISPLAY_NAME="IMAGE"
+
+    tmp_header_file=upload-header.tmp
+
+    # Initial resumable request defining metadata.
+    curl "https://generativelanguage.googleapis.com/upload/v1beta/files?key=$API_KEY" \
+      -D upload-header.tmp \
+      -H "X-Goog-Upload-Protocol: resumable" \
+      -H "X-Goog-Upload-Command: start" \
+      -H "X-Goog-Upload-Header-Content-Length: ${NUM_BYTES}" \
+      -H "X-Goog-Upload-Header-Content-Type: ${MIME_TYPE}" \
+      -H "Content-Type: application/json" \
+      -d "{
+        \"file\": {
+          \"display_name\": \"${DISPLAY_NAME}\"
+        }
+      }" 2> /dev/null
+
+    upload_url=$(grep -i "x-goog-upload-url: " "${tmp_header_file}" | cut -d" " -f2 | tr -d "\r")
+    rm "${tmp_header_file}"
+
+    # Upload the actual bytes.
+    curl "${upload_url}" \
+      -H "Content-Length: ${NUM_BYTES}" \
+      -H "X-Goog-Upload-Offset: 0" \
+      -H "X-Goog-Upload-Command: upload, finalize" \
+      --data-binary "@${IMAGE_PATH}" 2> /dev/null > /tmp/file_info.json
+
+    file_uri=$(jq -r ".file.uri" /tmp/file_info.json)
+
+    # Generate content using that file
+    curl "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$API_KEY" \
+        -H 'Content-Type: application/json' \
+        -X POST \
+        -d "{
+          \"contents\": [{
+            \"parts\": [
+              {
+                \"file_data\": {
+                  \"mime_type\": \"${MIME_TYPE}\",
+                  \"file_uri\": \"${file_uri}\"
+                }
+              },
+              {
+                \"text\": \"$description\"
+              }
+            ]
+          }]
+        }" 2> /dev/null > /tmp/response.json
+
+    # Save the extracted text into a variable
+    output_text=$(jq -r ".candidates[].content.parts[].text" /tmp/response.json)
+
+    # Return the result
+    echo "$output_text"
+}
+
+for entry in "$images_path/"*; do
+    
+    name="$(get_response "$entry" "You have to provide a name for a folder to store this file, give a short name that defines the picture. Give only that name as output, since your response will be used in a script")"
+    
+    # Create a new directory for the name given
+    mkdir -p "$images_path/$name"
+    
+    # Move the image to the new directory
+    mv "$entry" "images_path/$name"
+done
+
+
+
