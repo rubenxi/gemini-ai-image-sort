@@ -76,6 +76,9 @@ for entry in "$images_path/"*; do
     
     # Move the image to the new directory
     mv "$entry" "images_path/$name"
+
+    name_gemini=$(jq ".file.name" /tmp/file_info.json | cut -d'/' -f2- | cut -d'"' -f1-1)
+    curl --request "DELETE" https://generativelanguage.googleapis.com/v1beta/files/$name_gemini?key=$API_KEY
 done
 
 
